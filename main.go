@@ -372,14 +372,31 @@ func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request) {
-	dbchirps, err := cfg.query.GetChirps(r.Context())
+	authorIDString := r.URL.Query().Get("author_id")
+	sortOrder := r.URL.Query().Get("sort")
+
+	var dbChirps []database.Chirp
+	var err error
+
+	if authorIDString != ""{
+		authorID, parseErr := uuid.Parse(authorIDString)
+		if parseErr != nil {
+			respondWithError(w,http.StatusBadRequest,"Invalid author ID")
+			return
+		}
+		dbChirps, err = cfg.query.GetChirpsForAuthor(r.Context(),authorID)
+	} else {
+		dbChirps, err = cfg.query.GetChirps(r.Context())
+	}
 	if err != nil {
 		log.Printf("Error getting chirp: %v", err)
-		respondWithError(w, 500, "Couldn't get chirp")
+		respondWithError(w, http.StatusInternalServerError, "Couldn't get chirp")
 		return
 	}
+
+
 	chirps := []Chirp{}
-	for _, chirp := range dbchirps {
+	for _, chirp := range dbChirps {
 		chirps = append(chirps, Chirp{
 			ID:        chirp.ID,
 			CreatedAt: chirp.CreatedAt,
@@ -388,6 +405,28 @@ func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request) {
 			UserID:    chirp.UserID,
 		})
 	}
+	if sortOrder == "desc" {
+		slices.SortFunc(chirps, func(a, b Chirp) int {
+			if a.CreatedAt.After(b.CreatedAt){
+				return -1
+			}
+			if a.CreatedAt.Before(b.CreatedAt){
+				return 1
+			}
+			return 0
+		})
+	} else {
+		slices.SortFunc(chirps, func(a, b Chirp) int {
+			if a.CreatedAt.Before(b.CreatedAt) {
+				return -1 // 'a' comes before 'b' (Older first)
+			}
+			if a.CreatedAt.After(b.CreatedAt) {
+				return 1
+			}
+			return 0
+		})
+	}
+
 
 	respondWithJSON(w, http.StatusOK, chirps)
 }
