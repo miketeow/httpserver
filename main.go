@@ -23,6 +23,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	query          *database.Queries
 	Platform       string
+	jwtSecret string
 }
 
 // type chirpResponse struct {
@@ -34,6 +35,7 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+	Token string `json:"token"`
 }
 
 type errorResponse struct {
@@ -150,6 +152,7 @@ func (cfg *apiConfig) handleLogin(w http.ResponseWriter, r *http.Request) {
 	type parameter struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
+		ExpiresInSeconds int `json:"expires_in_seconds"` //Optional
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -158,6 +161,12 @@ func (cfg *apiConfig) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Something went wrong")
 		return
+	}
+
+	// Handle Expiration Logic
+	defaultExpiry := time.Hour
+	if params.ExpiresInSeconds > 0 && time.Duration(params.ExpiresInSeconds)*time.Second < defaultExpiry {
+		defaultExpiry = time.Duration(params.ExpiresInSeconds) * time.Second
 	}
 
 	user, err := cfg.query.GetUserByEmail(r.Context(), params.Email)
@@ -175,19 +184,39 @@ func (cfg *apiConfig) handleLogin(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
 		return
 	}
-	respondWithJSON(w, http.StatusOK, User{ID: user.ID, CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt, Email: user.Email})
+
+	// Create the Token
+	token, err := auth.MakeJWT(user.ID, cfg.jwtSecret, defaultExpiry)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create token")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, User{ID: user.ID, CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt, Email: user.Email, Token: token})
 }
 
 func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
+	// get the token from headers
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't find JWT")
+		return
+	}
+
+	// validate token and extract the user id
+	userID, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't validate JWT")
+		return
+	}
 	type parameter struct {
 		Body   string    `json:"body"`
-		UserID uuid.UUID `json:"user_id"`
 	}
 
 	// move validate_chirp logic here
 	decoder := json.NewDecoder(r.Body)
 	params := parameter{}
-	err := decoder.Decode(&params)
+	err = decoder.Decode(&params)
 	// old validation logic
 	if err != nil {
 		respondWithError(w, 500, "Something went wrong")
@@ -202,7 +231,7 @@ func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 	// database call
 	chirp, err := cfg.query.CreateChirp(r.Context(), database.CreateChirpParams{
 		Body:   cleanedBody,
-		UserID: params.UserID,
+		UserID: userID,
 	})
 	if err != nil {
 		log.Printf("Error creating chirp: %v", err)
@@ -279,6 +308,7 @@ func main() {
 		fileserverHits: atomic.Int32{},
 		query:          dbQueries,
 		Platform:       os.Getenv("PLATFORM"),
+		jwtSecret: os.Getenv("JWT_SECRET"),
 	}
 
 	mux := http.NewServeMux()
