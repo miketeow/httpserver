@@ -39,6 +39,9 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 	claimedStruct := jwt.RegisteredClaims{}
 
 	token, err := jwt.ParseWithClaims(tokenString, &claimedStruct, func(t *jwt.Token) (any, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+      return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+    }
 		return []byte(tokenSecret), nil
 	})
 	if err != nil {

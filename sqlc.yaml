@@ -5,4 +5,5 @@ sql:
     engine: "postgresql"
     gen:
       go:
+        package: "database"
         out: "internal/database"

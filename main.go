@@ -246,9 +246,13 @@ func (cfg *apiConfig) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	now := time.Now().UTC()
+
 	_, err = cfg.query.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
 		Token:     refreshTokenStr,
 		UserID:    user.ID,
+		CreatedAt: now,
+		UpdatedAt: now,
 		ExpiresAt: time.Now().Add(time.Hour * 24 * 60), // 60 Days
 	})
 
@@ -284,7 +288,10 @@ func (cfg *apiConfig) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, http.StatusUnauthorized, "Couldn't find token")
 		return
 	}
-	user, err := cfg.query.GetUserFromRefreshToken(r.Context(), refreshToken)
+	user, err := cfg.query.GetUserFromRefreshToken(r.Context(), database.GetUserFromRefreshTokenParams{
+		Token:     refreshToken,
+		ExpiresAt: time.Now().UTC(),
+	})
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "Invalid refresh token")
 		return
@@ -308,7 +315,13 @@ func (cfg *apiConfig) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, http.StatusUnauthorized, "Couldn't find token")
 		return
 	}
-	err = cfg.query.RevokeRefreshToken(r.Context(), refreshToken)
+	err = cfg.query.RevokeRefreshToken(r.Context(), database.RevokeRefreshTokenParams{
+		Token: refreshToken,
+		RevokedAt: sql.NullTime{
+			Time:  time.Now().UTC(),
+			Valid: true,
+		},
+	})
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't revoke token")
 		return
@@ -378,13 +391,13 @@ func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request) {
 	var dbChirps []database.Chirp
 	var err error
 
-	if authorIDString != ""{
+	if authorIDString != "" {
 		authorID, parseErr := uuid.Parse(authorIDString)
 		if parseErr != nil {
-			respondWithError(w,http.StatusBadRequest,"Invalid author ID")
+			respondWithError(w, http.StatusBadRequest, "Invalid author ID")
 			return
 		}
-		dbChirps, err = cfg.query.GetChirpsForAuthor(r.Context(),authorID)
+		dbChirps, err = cfg.query.GetChirpsForAuthor(r.Context(), authorID)
 	} else {
 		dbChirps, err = cfg.query.GetChirps(r.Context())
 	}
@@ -393,7 +406,6 @@ func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't get chirp")
 		return
 	}
-
 
 	chirps := []Chirp{}
 	for _, chirp := range dbChirps {
@@ -407,10 +419,10 @@ func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request) {
 	}
 	if sortOrder == "desc" {
 		slices.SortFunc(chirps, func(a, b Chirp) int {
-			if a.CreatedAt.After(b.CreatedAt){
+			if a.CreatedAt.After(b.CreatedAt) {
 				return -1
 			}
-			if a.CreatedAt.Before(b.CreatedAt){
+			if a.CreatedAt.Before(b.CreatedAt) {
 				return 1
 			}
 			return 0
@@ -426,7 +438,6 @@ func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request) {
 			return 0
 		})
 	}
-
 
 	respondWithJSON(w, http.StatusOK, chirps)
 }
